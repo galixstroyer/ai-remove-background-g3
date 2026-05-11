@@ -1,156 +1,153 @@
-# AI Remove Background for GIMP 3.0
+# AI Remove Background for GIMP 3.x
 
-A powerful GIMP 3.0.4+ plugin that uses AI models to automatically remove backgrounds from images, with support for multiple AI models, custom backgrounds, and batch processing.
+A powerful GIMP 3.x plugin that uses AI models to automatically remove backgrounds from images, with support for multiple AI models, custom backgrounds, and batch processing.
+
+Compatible with **GIMP 3.0, 3.2, and later 3.x releases**.
 
 ## About
 
 **AI Remove Background** is an open-source GIMP plugin developed by [Gideon DeHaan](https://gideondehaan.dev), a 13-year-old programmer passionate about making advanced image editing tools accessible to everyone.
 
-This plugin integrates the popular `rembg` Python library with GIMP 3.0, providing professional-quality background removal directly within your favorite image editor.
+This plugin integrates the popular `rembg` Python library with GIMP 3, providing professional-quality background removal directly within your favorite image editor.
 
 ## Features
 
-- **Multiple AI Models**: Choose from 8 different AI models optimized for various use cases:
-  - `u2net` - General purpose background removal
-  - `u2net_human_seg` - Optimized for human subjects
-  - `u2net_cloth_seg` - Specialized for clothing/fashion
-  - `u2netp` - Lightweight version for faster processing
-  - `silueta` - High-quality silhouette extraction
-  - `isnet-general-use` - Advanced model for general use
-  - `isnet-anime` - Optimized for anime/illustration style images
-  - `sam` - Segment Anything Model for versatile segmentation
+- **Multiple AI Models**: Choose from 8 different models via a labeled dropdown:
+  - **U2-Net** — General purpose background removal
+  - **U2-Net Human Segmentation** — Optimized for human subjects
+  - **U2-Net Cloth Segmentation** — Specialized for clothing/fashion
+  - **U2-Net Lightweight** — Faster processing, lower memory usage
+  - **Silueta** — High-quality silhouette extraction
+  - **ISNet General Use** — Advanced model for general use
+  - **ISNet Anime** — Optimized for anime/illustration style images
+  - **SAM (Segment Anything)** — Versatile segmentation for complex scenes
 
-- **Flexible Background Options**:
+- **Flexible Background Options** (dropdown selector):
   - Transparent background (default)
   - White background
   - Black background
-  - Custom color background (supports hex colors with alpha)
+  - Custom color background (hex colors with optional alpha)
 
 - **Advanced Features**:
-  - Alpha matting for smoother edges
+  - Alpha matting for smoother edges (toggle enables/disables erode size control)
   - Optional layer mask creation
-  - Square canvas resizing
-  - Batch processing for multiple open images
+  - Square canvas resizing (centers and pads the image)
+  - Batch processing for all open images at once
   - Preserves layer offsets and positioning
 
 ## Requirements
 
-- **GIMP 3.0.4** or newer
-- **Python 3.8+** with the following packages:
-  - `rembg` (install via pip)
-  - `gi` (Python GObject Introspection - usually comes with GIMP)
+- **GIMP 3.0** or newer (tested on 3.0.x and 3.2.x)
+- **Python 3.8+** with `rembg` installed
 - **System**: Linux, macOS, or Windows
 
-## Installation
+## Quick Install
+
+On Linux or macOS, run the included install script:
+
+```bash
+chmod +x install.sh
+./install.sh
+```
+
+This will set up the rembg virtual environment (if needed) and install the plugin into your GIMP plug-ins directory.
+
+## Manual Installation
 
 ### Step 1: Install rembg
 
-First, you need to install the `rembg` Python package. The plugin looks for it in `~/.rembg/bin/python` by default:
+The plugin needs the `rembg` Python package. By default it looks for `~/.rembg/bin/python`:
 
 ```bash
-# Create a virtual environment (recommended)
 python3 -m venv ~/.rembg
 ~/.rembg/bin/pip install rembg
-
-# Or install globally (not recommended)
-pip install rembg
 ```
 
 ### Step 2: Install the Plugin
 
-1. **Download the plugin file**: `ai-remove-background-g3.py`
-
-2. **Find your GIMP plugins directory**:
+1. **Find your GIMP plug-ins directory**:
    - **Linux**: `~/.config/GIMP/3.0/plug-ins/`
    - **macOS**: `~/Library/Application Support/GIMP/3.0/plug-ins/`
    - **Windows**: `%APPDATA%\GIMP\3.0\plug-ins\`
 
-3. **Create a plugin directory**:
+   If you have GIMP 3.2 installed, the path may use `3.2` instead of `3.0`.
+
+2. **Create a plugin directory and copy the file**:
    ```bash
    mkdir -p ~/.config/GIMP/3.0/plug-ins/ai-remove-background-g3
-   ```
-
-4. **Copy the plugin file**:
-   ```bash
    cp ai-remove-background-g3.py ~/.config/GIMP/3.0/plug-ins/ai-remove-background-g3/
-   ```
-
-5. **Make the plugin executable** (Linux/macOS only):
-   ```bash
    chmod +x ~/.config/GIMP/3.0/plug-ins/ai-remove-background-g3/ai-remove-background-g3.py
    ```
 
-6. **Restart GIMP**
+3. **Restart GIMP**
 
-The plugin will appear in the menu under **Filters → AI → AI Remove Background…**
+The plugin will appear under **Filters > AI > AI Remove Background...**
 
 ## Usage
 
 1. Open an image in GIMP
 2. Select the layer you want to process
-3. Go to **Filters → AI → AI Remove Background…**
+3. Go to **Filters > AI > AI Remove Background...**
 4. Configure your options:
-   - **Model**: Choose the AI model best suited for your image
-   - **Alpha Matting**: Enable for smoother edges (increases processing time)
-   - **Background Mode**: Select transparent, white, black, or custom color
-   - **Make Square**: Optionally resize canvas to square dimensions
-   - **Process All Images**: Apply to all open images in batch mode
+   - **AI Model**: Choose the model best suited for your image
+   - **Alpha Matting**: Check to enable smoother edges; adjusts the erode size slider
+   - **Background**: Select transparent, white, black, or custom color
+   - **Custom Color**: Enter a hex color when using Custom background
+   - **Create Layer Mask**: Optionally attach a mask to the result layer
+   - **Square Canvas**: Resize canvas to a centered square
+   - **Process All Open Images**: Apply to every open image in batch
 5. Click **OK** to process
 
 ### Tips for Best Results
 
-- **Human portraits**: Use `u2net_human_seg` model
-- **Product photography**: Use `isnet-general-use` or `u2net`
-- **Clothing/fashion**: Use `u2net_cloth_seg`
-- **Anime/illustrations**: Use `isnet-anime`
-- **Complex scenes**: Try `sam` model with alpha matting enabled
+- **Human portraits**: Use U2-Net Human Segmentation
+- **Product photography**: Use ISNet General Use or U2-Net
+- **Clothing/fashion**: Use U2-Net Cloth Segmentation
+- **Anime/illustrations**: Use ISNet Anime
+- **Complex scenes**: Try SAM with alpha matting enabled
 
 ## Troubleshooting
 
 ### Plugin doesn't appear in menu
-- Ensure the plugin file is executable (Linux/macOS)
+- Ensure the plugin file is executable (`chmod +x`)
 - Check that the plugin is in its own directory: `ai-remove-background-g3/ai-remove-background-g3.py`
-- Verify GIMP version is 3.0.4 or newer
-- Check GIMP's Error Console (Windows → Dockable Dialogs → Error Console)
+- Verify GIMP version is 3.0 or newer
+- Check GIMP's Error Console (Windows > Dockable Dialogs > Error Console)
 
 ### "Python executable not found" error
 - Install rembg in the default location: `~/.rembg/bin/python`
 - Or specify a custom Python path in the plugin dialog
-- Ensure Python has rembg installed: `python -m pip list | grep rembg`
+- Verify rembg is installed: `~/.rembg/bin/python -m rembg.cli --help`
 
 ### "rembg failed" error
 - Check that rembg is properly installed with all dependencies
-- Try running rembg from command line to test: `python -m rembg.cli --help`
-- Some models download on first use - ensure you have internet connection
+- Some models download on first use — ensure you have internet access
 - Check available disk space for model downloads (~100-500MB per model)
 
 ### Poor quality results
-- Try different AI models - each is optimized for different image types
+- Try different AI models — each is optimized for different image types
 - Enable Alpha Matting for smoother edges
-- Adjust the Alpha Matting Erode Size (default: 15)
+- Adjust the erode size (default: 15)
 - Ensure your input image has good contrast between subject and background
 
 ## Advanced Configuration
 
 ### Using a Different Python Installation
 
-If you have rembg installed in a different Python environment, you can specify the path in the plugin dialog's "Python executable" field. Examples:
+Specify the path in the plugin dialog's "Python Path" field. Examples:
 - Conda: `/home/user/miniconda3/envs/myenv/bin/python`
 - System Python: `/usr/bin/python3`
 - Virtual environment: `/path/to/venv/bin/python`
 
 ### Batch Processing
 
-Enable "Process all open images" to apply the same background removal settings to multiple images at once. This is useful for:
-- Product photography workflows
-- Portrait sessions
-- Creating consistent assets for games/websites
+Enable "Process All Open Images" to apply the same settings to every open image at once. Useful for product photography, portrait sessions, and creating consistent assets.
 
 ### Custom Background Colors
 
-When using Custom background mode, you can specify colors in these formats:
-- `#RRGGBB` - Standard hex color (e.g., `#FF5733`)
-- `#RRGGBBAA` - Hex color with alpha channel (e.g., `#FF5733CC`)
+When using Custom background mode, specify colors as:
+- `#RRGGBB` — e.g., `#FF5733`
+- `#RRGGBBAA` — with alpha, e.g., `#FF5733CC`
 
 ## License
 
@@ -180,12 +177,6 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## Support the Developer
-
-If you find this plugin useful, please consider supporting Gideon's work:
-
-🎁 **[Donate](https://gideondehaan.dev/donate)** - Help a young developer continue creating awesome tools!
-
 ## Contributing
 
 Contributions are welcome! Feel free to:
@@ -196,12 +187,11 @@ Contributions are welcome! Feel free to:
 ## Acknowledgments
 
 - Built on top of the excellent [rembg](https://github.com/danielgatis/rembg) library
-- Thanks to the GIMP development team for GIMP 3.0's improved Python API
-- Inspired by the needs of digital artists and photographers worldwide
+- Thanks to the GIMP development team for GIMP 3's improved Python API
 
 ## Technical Notes
 
-- The plugin exports your selected layer as a temporary JPG file
+- The plugin exports your selected layer as a temporary JPG file (unique name per run)
 - Processes it through rembg using the selected AI model
 - Imports the result as a PNG with transparency
 - Optionally adds backgrounds or creates layer masks
@@ -209,4 +199,4 @@ Contributions are welcome! Feel free to:
 
 ---
 
-**Made with ❤️ by [Gideon DeHaan](https://gideondehaan.dev)** - A 13-year-old programmer making professional tools accessible to everyone
+**Made with love by [Gideon DeHaan](https://gideondehaan.dev)**

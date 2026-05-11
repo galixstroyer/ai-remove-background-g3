@@ -1,10 +1,17 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+#
+# AI Remove Background for GIMP 3.x
+# Compatible with GIMP 3.0, 3.2, and later 3.x releases.
+#
+# Copyright (c) 2025 Gideon DeHaan — MIT License
+# https://gideondehaan.dev
 
 import os
 import sys
 import subprocess
 import tempfile
+import uuid
 
 import gi
 gi.require_version('Gimp', '3.0')
@@ -12,26 +19,39 @@ gi.require_version('GimpUi', '3.0')
 gi.require_version('Gegl', '0.4')
 from gi.repository import Gimp, GimpUi, Gegl, Gio, GLib, GObject
 
-MODELS = (
-    "u2net",
-    "u2net_human_seg",
-    "u2net_cloth_seg",
-    "u2netp",
-    "silueta",
-    "isnet-general-use",
-    "isnet-anime",
-    "sam",
-)
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
 
-# Background modes
-BG_TRANSPARENT = 0
-BG_WHITE       = 1
-BG_BLACK       = 2
-BG_CUSTOM      = 3
-
-DEFAULT_PYTHON = os.path.expanduser("~/.rembg/bin/python")
 PLUGIN_PROC_NAME = "plug-in-ai-remove-background-g3"
 MENU_PATH = "<Image>/Filters/AI/"
+DEFAULT_PYTHON = os.path.expanduser("~/.rembg/bin/python")
+
+MODELS = (
+    ("u2net",            "U2-Net — General Purpose"),
+    ("u2net_human_seg",  "U2-Net — Human Segmentation"),
+    ("u2net_cloth_seg",  "U2-Net — Cloth Segmentation"),
+    ("u2netp",           "U2-Net — Lightweight / Fast"),
+    ("silueta",          "Silueta"),
+    ("isnet-general-use","ISNet — General Use"),
+    ("isnet-anime",      "ISNet — Anime / Illustration"),
+    ("sam",              "SAM — Segment Anything"),
+)
+
+BG_MODES = (
+    ("transparent", "Transparent"),
+    ("white",       "White"),
+    ("black",       "Black"),
+    ("custom",      "Custom Color"),
+)
+
+# Check whether Gimp.Choice is available (GIMP ≥ 3.0.2 / 3.2+).
+# Older 3.0.0 builds may not have it, so we fall back to int arguments.
+_HAS_CHOICE = hasattr(Gimp, "Choice")
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 def _cleanup(*paths):
     for p in paths:
@@ -41,86 +61,83 @@ def _cleanup(*paths):
         except Exception:
             pass
 
+
 def _export_drawable_as_jpg(image: Gimp.Image, drawable: Gimp.Drawable, jpg_path: str):
     """Export a composite of ONLY the given drawable to a JPG file."""
     dup = image.duplicate()
     try:
         pos = image.get_item_position(drawable)
-        layers = dup.get_layers()  # top -> bottom
-        for i, L in enumerate(layers):
-            L.set_visible(i == pos)
+        for i, layer in enumerate(dup.get_layers()):
+            layer.set_visible(i == pos)
         dup.merge_visible_layers(Gimp.MergeType.CLIP_TO_IMAGE)
-
-        jpg_file = Gio.File.new_for_path(jpg_path)
-        Gimp.file_save(Gimp.RunMode.NONINTERACTIVE, dup, jpg_file, None)
+        Gimp.file_save(Gimp.RunMode.NONINTERACTIVE, dup,
+                       Gio.File.new_for_path(jpg_path), None)
     finally:
-        pass
+        dup.delete()
 
-def _run_rembg(python_exe: str, model: str, alpha_matting: bool, ae_value: int, in_path: str, out_path: str):
+
+def _run_rembg(python_exe: str, model: str, alpha_matting: bool,
+               ae_value: int, in_path: str, out_path: str):
     python_exe = os.path.expanduser(python_exe or "python3")
     if not os.path.exists(python_exe):
-        raise RuntimeError(f"Python executable not found: {python_exe}")
+        raise RuntimeError(
+            f"Python executable not found: {python_exe}\n\n"
+            "Install rembg with:\n"
+            "  python3 -m venv ~/.rembg\n"
+            "  ~/.rembg/bin/pip install rembg"
+        )
 
     cmd = [python_exe, "-m", "rembg.cli", "i", "-m", model]
     if alpha_matting:
         cmd += ["-a", "-ae", str(int(ae_value))]
     cmd += [in_path, out_path]
 
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=False)
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, shell=False)
     _, stderr = proc.communicate()
     if proc.returncode != 0:
-        raise RuntimeError(stderr.decode("utf-8", errors="ignore") or "rembg failed")
+        msg = stderr.decode("utf-8", errors="ignore").strip()
+        raise RuntimeError(msg or "rembg exited with an error")
+
 
 def _parse_color_rgba(color_str: str):
-    """
-    Parse color string '#RRGGBB' or '#RRGGBBAA' (case-insensitive) into floats 0..1.
-    Fallback to white if parse fails.
-    """
+    """Parse '#RRGGBB' or '#RRGGBBAA' → (r, g, b, a) floats 0‥1."""
     s = (color_str or "").strip().lstrip("#")
     try:
         if len(s) == 6:
-            r = int(s[0:2], 16) / 255.0
-            g = int(s[2:4], 16) / 255.0
-            b = int(s[4:6], 16) / 255.0
-            a = 1.0
-        elif len(s) == 8:
-            r = int(s[0:2], 16) / 255.0
-            g = int(s[2:4], 16) / 255.0
-            b = int(s[4:6], 16) / 255.0
-            a = int(s[6:8], 16) / 255.0
-        else:
-            return (1.0, 1.0, 1.0, 1.0)
-        return (r, g, b, a)
+            return (int(s[0:2], 16) / 255.0,
+                    int(s[2:4], 16) / 255.0,
+                    int(s[4:6], 16) / 255.0, 1.0)
+        if len(s) == 8:
+            return (int(s[0:2], 16) / 255.0,
+                    int(s[2:4], 16) / 255.0,
+                    int(s[4:6], 16) / 255.0,
+                    int(s[6:8], 16) / 255.0)
     except Exception:
-        return (1.0, 1.0, 1.0, 1.0)
+        pass
+    return (1.0, 1.0, 1.0, 1.0)
 
-def _new_bg_layer(image: Gimp.Image, mode: int, color_str: str):
-    """
-    Create and return a background layer per mode.
-    For Transparent mode this returns None (no background).
-    """
-    if mode == BG_TRANSPARENT:
+
+def _new_bg_layer(image: Gimp.Image, bg_mode: str, color_str: str):
+    """Create a filled background layer.  Returns None for transparent."""
+    if bg_mode == "transparent":
         return None
 
     w, h = image.get_width(), image.get_height()
+    use_alpha = (bg_mode == "custom")
     bg = Gimp.Layer.new(
-        image,
-        "Background",
-        w, h,
-        Gimp.ImageType.RGBA_IMAGE if mode == BG_CUSTOM else Gimp.ImageType.RGB_IMAGE,
-        100.0,
-        Gimp.LayerMode.NORMAL,
+        image, "Background", w, h,
+        Gimp.ImageType.RGBA_IMAGE if use_alpha else Gimp.ImageType.RGB_IMAGE,
+        100.0, Gimp.LayerMode.NORMAL,
     )
     image.insert_layer(bg, None, -1)
 
-    if mode == BG_WHITE:
+    if bg_mode == "white":
         bg.fill(Gimp.FillType.WHITE)
-    elif mode == BG_BLACK:
+    elif bg_mode == "black":
         bg.fill(Gimp.FillType.BLACK)
-    elif mode == BG_CUSTOM:
-        # Fill with custom color via GEGL solid-color node
+    elif bg_mode == "custom":
         r, g, b, a = _parse_color_rgba(color_str)
-        # Build a tiny GEGL graph to paint a solid color on the bg buffer
         Gegl.init(None)
         graph = Gegl.Node()
         solid = graph.create_child("gegl:solid-color")
@@ -133,77 +150,81 @@ def _new_bg_layer(image: Gimp.Image, mode: int, color_str: str):
 
     return bg
 
-def _mask_enum_alpha_fallback():
-    """
-    Return an AddMaskType that initializes a mask from alpha if available.
-    Fall back to ADD_WHITE if not exposed in this build.
-    """
+
+def _mask_enum_alpha():
+    """Return the AddMaskType for 'from alpha', with cross-version fallback."""
     for name in ("ADD_ALPHA", "ADD_ALPHA_CHANNEL", "ADD_FROM_ALPHA", "FROM_ALPHA"):
         if hasattr(Gimp.AddMaskType, name):
             return getattr(Gimp.AddMaskType, name)
-    return getattr(Gimp.AddMaskType, "ADD_WHITE")  # safe fallback
+    return getattr(Gimp.AddMaskType, "ADD_WHITE")
 
-def _insert_result_layer(image: Gimp.Image, png_path: str, offset_x: int, offset_y: int,
-                         as_mask: bool, bg_mode: int, bg_color_str: str,
-                         orig_layer: Gimp.Layer | None):
-    """
-    Insert the rembg result. If bg_mode == Transparent: keep alpha and don't merge.
-    Else, create background, position cut-out above it, merge down.
-    If as_mask is True, attach a mask to the new cut-out layer.
-    """
-    png_file = Gio.File.new_for_path(png_path)
-    cutout = Gimp.file_load_layer(Gimp.RunMode.NONINTERACTIVE, image, png_file)
+
+def _insert_result_layer(image, png_path, off_x, off_y,
+                         as_mask, bg_mode, bg_color, orig_layer):
+    """Load the rembg output PNG and compose it into the image."""
+    cutout = Gimp.file_load_layer(
+        Gimp.RunMode.NONINTERACTIVE, image,
+        Gio.File.new_for_path(png_path))
     image.insert_layer(cutout, None, 0)
-    cutout.set_offsets(offset_x, offset_y)
+    cutout.set_offsets(off_x, off_y)
 
-    # Optionally add a mask to the cutout itself (not required for transparency)
     if as_mask:
-        mt = _mask_enum_alpha_fallback()
         try:
-            mask = cutout.create_mask(mt)
+            mask = cutout.create_mask(_mask_enum_alpha())
             cutout.add_mask(mask)
         except Exception:
-            # As a last resort ensure no crash if enum is odd on this build
             pass
 
-    # Remove the original source layer so the cutout replaces it
     if orig_layer is not None:
         try:
             image.remove_layer(orig_layer)
         except Exception:
             pass
 
-    # Background handling
-    if bg_mode == BG_TRANSPARENT:
-        # Nothing else to do — keep layers separate and transparent
+    if bg_mode == "transparent":
         return
 
-    # Otherwise, create and fill background then merge down
-    bg = _new_bg_layer(image, bg_mode, bg_color_str)
-    # Make sure cutout is above bg
+    _new_bg_layer(image, bg_mode, bg_color)
     image.raise_item_to_top(cutout)
-    # Merge cutout onto background -> result single non-transparent layer
     image.merge_down(cutout, Gimp.MergeType.CLIP_TO_BOTTOM_LAYER)
 
-def _get_drawable_for_image(img: Gimp.Image) -> Gimp.Drawable | None:
-    get_sel = getattr(img, "get_selected_layers", None)
-    if callable(get_sel):
-        sel = get_sel()
-        if sel:
-            return sel[0]
+
+def _get_drawable(img: Gimp.Image):
+    sel = getattr(img, "get_selected_layers", None)
+    if callable(sel):
+        layers = sel()
+        if layers:
+            return layers[0]
     layers = img.get_layers()
     return layers[0] if layers else None
 
-def _process_image(image: Gimp.Image,
-                   drawable: Gimp.Drawable,
-                   as_mask: bool,
-                   sel_model: int,
-                   alpha_matting: bool,
-                   ae_value: int,
-                   bg_mode: int,
-                   bg_color: str,
-                   make_square: bool,
-                   python_exe: str):
+
+# ---------------------------------------------------------------------------
+# Resolve model / bg-mode from config (works with Choice *or* int args)
+# ---------------------------------------------------------------------------
+
+def _resolve_model(config):
+    """Return the model nick string regardless of argument type."""
+    if _HAS_CHOICE:
+        return config.get_property("model")
+    idx = config.get_property("sel-model")
+    return MODELS[min(idx, len(MODELS) - 1)][0]
+
+
+def _resolve_bg_mode(config):
+    """Return the bg-mode nick string regardless of argument type."""
+    if _HAS_CHOICE:
+        return config.get_property("bg-mode")
+    idx = config.get_property("bg-mode-idx")
+    return BG_MODES[min(idx, len(BG_MODES) - 1)][0]
+
+
+# ---------------------------------------------------------------------------
+# Core processing
+# ---------------------------------------------------------------------------
+
+def _process_image(image, drawable, as_mask, model, alpha_matting, ae_value,
+                   bg_mode, bg_color, make_square, python_exe):
     if drawable is None:
         return
 
@@ -218,35 +239,36 @@ def _process_image(image: Gimp.Image,
     else:
         off_x = off_y = 0
 
+    uid = uuid.uuid4().hex[:8]
     tdir = tempfile.gettempdir()
-    jpg_path = os.path.join(tdir, "Temp-gimp-0000.jpg")
-    png_path = os.path.join(tdir, "Temp-gimp-0000.png")
+    jpg_path = os.path.join(tdir, f"gimp-rembg-{uid}.jpg")
+    png_path = os.path.join(tdir, f"gimp-rembg-{uid}.png")
 
-    _cleanup(jpg_path, png_path)
+    try:
+        _export_drawable_as_jpg(image, drawable, jpg_path)
+        _run_rembg(python_exe, model, alpha_matting, ae_value,
+                   jpg_path, png_path)
 
-    _export_drawable_as_jpg(image, drawable, jpg_path)
-    _run_rembg(python_exe, MODELS[sel_model], alpha_matting, ae_value, jpg_path, png_path)
+        if not os.path.exists(png_path):
+            raise RuntimeError("Output PNG was not created by rembg.")
 
-    if not os.path.exists(png_path):
-        raise RuntimeError("Output PNG was not created by rembg.")
+        _insert_result_layer(image, png_path, off_x, off_y,
+                             as_mask, bg_mode, bg_color, drawable)
 
-    _insert_result_layer(image, png_path, off_x, off_y, as_mask, bg_mode, bg_color,
-                         drawable if True else None)  # remove original layer always
+        if make_square:
+            w, h = image.get_width(), image.get_height()
+            s = max(w, h)
+            image.resize(s, s, (s - w) // 2, (s - h) // 2)
+    finally:
+        _cleanup(jpg_path, png_path)
 
-    if make_square:
-        w = image.get_width()
-        h = image.get_height()
-        max_side = max(w, h)
-        image.resize(max_side, max_side, (max_side - w) // 2, (max_side - h) // 2)
 
-    # IMPORTANT: don't merge-visible at the end if Transparent background,
-    # otherwise we'd bake the alpha away when someone adds a bg later.
-    # For non-transparent cases we already merged cutout onto the bg.
-    # So nothing else to do here.
-
-    _cleanup(jpg_path, png_path)
+# ---------------------------------------------------------------------------
+# GIMP Plug-In class
+# ---------------------------------------------------------------------------
 
 class RemoveBG(Gimp.PlugIn):
+
     def do_query_procedures(self):
         return [PLUGIN_PROC_NAME]
 
@@ -254,127 +276,174 @@ class RemoveBG(Gimp.PlugIn):
         if name != PLUGIN_PROC_NAME:
             return None
 
-        proc = Gimp.ImageProcedure.new(self, name, Gimp.PDBProcType.PLUGIN, self.run, None)
+        proc = Gimp.ImageProcedure.new(
+            self, name, Gimp.PDBProcType.PLUGIN, self.run, None)
         proc.set_image_types("*")
         proc.set_sensitivity_mask(Gimp.ProcedureSensitivityMask.DRAWABLE)
 
         proc.set_menu_label("AI Remove Background…")
         proc.add_menu_path(MENU_PATH)
-
         proc.set_documentation(
-            "Remove image background using rembg; default leaves transparency; "
-            "optional background fill (white/black/custom), optional square canvas, batch mode.",
-            "Exports the chosen drawable to JPG, runs rembg, and imports the result.",
+            "Remove image background using AI (rembg)",
+            "Exports the selected layer, runs rembg AI background removal, "
+            "and imports the result with optional background fill.",
             name,
         )
-        proc.set_attribution("Tech Archive (ported)", "GPLv3", "2025")
+        proc.set_attribution("Gideon DeHaan", "MIT", "2025")
 
-        proc.add_boolean_argument(
-            "as-mask", "Use as Mask",
-            "Attach a mask to the cut-out layer (optional; transparency works without this).",
-            False, GObject.ParamFlags.READWRITE,
-        )
-        proc.add_int_argument(
-            "sel-model", "Model index",
-            "Which rembg model to use: 0=u2net, 1=u2net_human_seg, 2=u2net_cloth_seg, 3=u2netp, 4=silueta, 5=isnet-general-use, 6=isnet-anime, 7=sam.",
-            0, len(MODELS) - 1, 0, GObject.ParamFlags.READWRITE,
-        )
+        # -- Model selection ------------------------------------------------
+        if _HAS_CHOICE:
+            model_choice = Gimp.Choice.new()
+            for i, (nick, label) in enumerate(MODELS):
+                model_choice.add(nick, i, label, "")
+            proc.add_choice_argument(
+                "model", "AI Model",
+                "Select the AI model for background removal",
+                model_choice, "u2net", GObject.ParamFlags.READWRITE,
+            )
+        else:
+            desc = ", ".join(f"{i}={m[0]}" for i, m in enumerate(MODELS))
+            proc.add_int_argument(
+                "sel-model", "Model index", desc,
+                0, len(MODELS) - 1, 0, GObject.ParamFlags.READWRITE,
+            )
+
+        # -- Alpha matting --------------------------------------------------
         proc.add_boolean_argument(
             "alpha-matting", "Alpha Matting",
-            "Enable rembg alpha matting (-a).",
+            "Enable alpha matting for smoother edges",
             False, GObject.ParamFlags.READWRITE,
         )
         proc.add_int_argument(
-            "ae-value", "Alpha Matting Erode Size",
-            "Erode size for alpha matting (-ae).",
+            "ae-value", "Erode Size",
+            "Alpha matting erode size (higher = more erosion at edges)",
             1, 100, 15, GObject.ParamFlags.READWRITE,
         )
 
-        # Background options
-        proc.add_int_argument(
-            "bg-mode", "Background mode",
-            "0=Transparent (default), 1=White, 2=Black, 3=Custom color (#RRGGBB or #RRGGBBAA).",
-            0, 3, BG_TRANSPARENT, GObject.ParamFlags.READWRITE,
-        )
+        # -- Background -----------------------------------------------------
+        if _HAS_CHOICE:
+            bg_choice = Gimp.Choice.new()
+            for i, (nick, label) in enumerate(BG_MODES):
+                bg_choice.add(nick, i, label, "")
+            proc.add_choice_argument(
+                "bg-mode", "Background",
+                "Background fill mode after removal",
+                bg_choice, "transparent", GObject.ParamFlags.READWRITE,
+            )
+        else:
+            desc = ", ".join(f"{i}={m[0]}" for i, m in enumerate(BG_MODES))
+            proc.add_int_argument(
+                "bg-mode-idx", "Background mode", desc,
+                0, len(BG_MODES) - 1, 0, GObject.ParamFlags.READWRITE,
+            )
+
         proc.add_string_argument(
-            "bg-color", "Custom background color",
-            "Used only when Background mode = 3 (Custom). Example: #112233 or #112233CC.",
+            "bg-color", "Custom Color",
+            "Hex color (#RRGGBB or #RRGGBBAA) — used only with Custom background",
             "#00000000", GObject.ParamFlags.READWRITE,
         )
 
+        # -- Extra options --------------------------------------------------
         proc.add_boolean_argument(
-            "make-square", "Make Square",
-            "Resize canvas to a centered square after background removal.",
+            "as-mask", "Create Layer Mask",
+            "Attach a layer mask from the alpha channel",
             False, GObject.ParamFlags.READWRITE,
         )
         proc.add_boolean_argument(
-            "process-all-images", "Process all open images",
-            "If enabled, apply to every open image; otherwise only the current one.",
+            "make-square", "Square Canvas",
+            "Resize the canvas to a centered square after removal",
+            False, GObject.ParamFlags.READWRITE,
+        )
+        proc.add_boolean_argument(
+            "process-all", "Process All Open Images",
+            "Apply background removal to every open image",
             False, GObject.ParamFlags.READWRITE,
         )
         proc.add_string_argument(
-            "python-exe", "Python executable for rembg",
-            "Path to Python where rembg is installed (default is ~/.rembg/bin/python).",
+            "python-exe", "Python Path",
+            "Path to the Python interpreter where rembg is installed",
             DEFAULT_PYTHON, GObject.ParamFlags.READWRITE,
         )
+
         return proc
+
+    # -----------------------------------------------------------------------
+    # Dialog & execution
+    # -----------------------------------------------------------------------
 
     def run(self, procedure, run_mode, image, drawables, config, run_data):
         if len(drawables) != 1:
-            msg = "This plug-in works with exactly one drawable."
-            err = GLib.Error.new_literal(Gimp.PlugIn.error_quark(), msg, 0)
-            return procedure.new_return_values(Gimp.PDBStatusType.CALLING_ERROR, err)
+            err = GLib.Error.new_literal(
+                Gimp.PlugIn.error_quark(),
+                "Please select exactly one layer before running this plug-in.", 0)
+            return procedure.new_return_values(
+                Gimp.PDBStatusType.CALLING_ERROR, err)
         drawable = drawables[0]
 
         if run_mode == Gimp.RunMode.INTERACTIVE:
             GimpUi.init("ai-remove-background-g3")
-            dlg = GimpUi.ProcedureDialog.new(procedure, config, "AI Remove Background")
-            dlg.fill(["as-mask", "sel-model", "alpha-matting", "ae-value",
-                      "bg-mode", "bg-color",
-                      "make-square", "process-all-images", "python-exe"])
+            dlg = GimpUi.ProcedureDialog.new(
+                procedure, config, "AI Remove Background")
+
+            # Organise the dialog into logical sections.
+            # Alpha-matting checkbox toggles sensitivity of erode-size.
+            dlg.fill_frame("matting-frame", "alpha-matting", False, "ae-value")
+
+            model_prop = "model" if _HAS_CHOICE else "sel-model"
+            bg_prop    = "bg-mode" if _HAS_CHOICE else "bg-mode-idx"
+
+            dlg.fill([model_prop, "matting-frame",
+                      bg_prop, "bg-color",
+                      "as-mask", "make-square", "process-all",
+                      "python-exe"])
+
             if not dlg.run():
                 dlg.destroy()
-                return procedure.new_return_values(Gimp.PDBStatusType.CANCEL, GLib.Error())
+                return procedure.new_return_values(
+                    Gimp.PDBStatusType.CANCEL, GLib.Error())
             dlg.destroy()
 
-        as_mask       = config.get_property("as-mask")
-        sel_model     = config.get_property("sel-model")
+        model         = _resolve_model(config)
+        bg_mode       = _resolve_bg_mode(config)
         alpha_matting = config.get_property("alpha-matting")
         ae_value      = config.get_property("ae-value")
-        bg_mode       = config.get_property("bg-mode")
         bg_color      = config.get_property("bg-color")
+        as_mask       = config.get_property("as-mask")
         make_square   = config.get_property("make-square")
-        do_all        = config.get_property("process-all-images")
+        do_all        = config.get_property("process-all")
         python_exe    = config.get_property("python-exe") or DEFAULT_PYTHON
 
         try:
             if do_all:
                 for img in Gimp.get_images():
-                    d = _get_drawable_for_image(img)
+                    d = _get_drawable(img)
                     if d is None:
                         continue
                     img.undo_group_start()
                     try:
-                        _process_image(img, d, as_mask, sel_model, alpha_matting, ae_value,
-                                       bg_mode, bg_color, make_square, python_exe)
+                        _process_image(img, d, as_mask, model, alpha_matting,
+                                       ae_value, bg_mode, bg_color,
+                                       make_square, python_exe)
                     finally:
                         img.undo_group_end()
             else:
                 image.undo_group_start()
                 try:
-                    _process_image(image, drawable, as_mask, sel_model, alpha_matting, ae_value,
-                                   bg_mode, bg_color, make_square, python_exe)
+                    _process_image(image, drawable, as_mask, model,
+                                   alpha_matting, ae_value, bg_mode,
+                                   bg_color, make_square, python_exe)
                 finally:
                     image.undo_group_end()
 
             Gimp.displays_flush()
-            return procedure.new_return_values(Gimp.PDBStatusType.SUCCESS, GLib.Error())
+            return procedure.new_return_values(
+                Gimp.PDBStatusType.SUCCESS, GLib.Error())
 
         except Exception as e:
             Gimp.message(f"AI Remove Background error:\n{e}")
             return procedure.new_return_values(
                 Gimp.PDBStatusType.EXECUTION_ERROR,
-                GLib.Error.new_literal(Gimp.PlugIn.error_quark(), str(e), 0)
-            )
+                GLib.Error.new_literal(Gimp.PlugIn.error_quark(), str(e), 0))
+
 
 Gimp.main(RemoveBG.__gtype__, sys.argv)
